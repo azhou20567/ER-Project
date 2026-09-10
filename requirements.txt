@@ -2,3 +2,6 @@ salabim
 numpy
 greenlet
 pandas
+pyreadstat
+pyarrow
+fastparquet

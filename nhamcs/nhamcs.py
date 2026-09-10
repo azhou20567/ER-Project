@@ -16,7 +16,7 @@ def get_spss(url,save_loc='.',convert_cat=False):
     else:
         zs = BytesIO(res.content)
         spssf = path.basename(url)
-    sl = path.join('.',spssf)
+    sl = path.join('..', spssf)
     with open(sl, "wb") as sav:
         sav.write(zs)
     df = pd.read_spss(sl,convert_categoricals=convert_cat)
@@ -25,28 +25,28 @@ def get_spss(url,save_loc='.',convert_cat=False):
 
 # creating urls
 base_url = 'https://ftp.cdc.gov/pub/health_statistics/nchs/dataset_documentation/NHAMCS/spss/'
-#files = ['ed02-spss.zip',
-         # 'ed03-spss.zip',
-         # 'ed04-spss.zip',
-         # 'ed05-sps.zip',
-         # 'ed06-spss.zip',
-         # 'ed07-spss.zip',
-         # 'ed08-spss.zip',
-         # 'ed09-spss.zip',
-         # 'ed2010-spss.zip',
-         # 'ed2011-spss.zip',
-         # 'ed2012-spss.zip',
-         # 'ed2013-spss.zip',
-         # 'ed2014-spss.zip',
-         # 'ed2015-spss.zip',
-         # 'ed2016-spss.zip',
-         # 'ed2017-spss.zip',
-         # 'ed2018-spss.zip',
-         # 'ed2019-spss.zip',
-         # 'ed2020-spss.zip',
-         # 'ed2021-spss.zip',
-         # 'ed2022-spss.zip']
-files = ['ed2022-spss.zip']
+files = ['ed02-spss.zip',
+         'ed03-spss.zip',
+         'ed04-spss.zip',
+         'ed05-sps.zip',
+         'ed06-spss.zip',
+         'ed07-spss.zip',
+         'ed08-spss.zip',
+         'ed09-spss.zip',
+         'ed2010-spss.zip',
+         'ed2011-spss.zip',
+         'ed2012-spss.zip',
+         'ed2013-spss.zip',
+         'ed2014-spss.zip',
+         'ed2015-spss.zip',
+         'ed2016-spss.zip',
+         'ed2017-spss.zip',
+         'ed2018-spss.zip',
+         'ed2019-spss.zip',
+         'ed2020-spss.zip',
+         'ed2021-spss.zip',
+         'ed2022-spss.zip']
+#files = ['ed2022-spss.zip']
 urls = [base_url + f for f in files]
 
 def get_data():
@@ -71,5 +71,7 @@ def get_data():
 
 rd, va = get_data()
 all_data = pd.concat(rd,axis=0,ignore_index=True)
-all_data.to_csv('nhamcs2022.csv',index=False)
-print(all_data.head())
+all_data['ARRTIME'] = all_data['ARRTIME'].astype(str)
+all_data['MED'] = pd.to_numeric(all_data['MED'], errors='coerce')
+all_data.attrs = {}
+all_data.to_parquet('nhamcsfull.parquet',index=False)
