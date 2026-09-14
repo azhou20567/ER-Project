@@ -12,7 +12,7 @@ MEAN_BED_TIME = 60  # time a patient occupies a bed/room for work (labs, imaging
 ESI_WEIGHTS_SYNTHETIC = [3, 12, 40, 35, 10]  # ESI 1..5
 SIMULATION_TIME = 5000
 
-DATASET_PATH = "data/ed2022-stata.dta"
+DATASET_PATH = "nhamcs/nhamcs2022.parquet"
 
 # Turn this to True for animation, otherwise keep it False.
 ANIMATE = True
