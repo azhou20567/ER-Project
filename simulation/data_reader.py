@@ -21,7 +21,7 @@ class ERDataReader:
     def load_data(self):
         """
         Loads data from the specified file based on its extension.
-        Supports CSV, Excel (.xlsx), and Stata (.dta) formats.
+        Supports CSV, Excel (.xlsx), Stata (.dta), and Parquet formats.
         """
         if not self.filepath.exists():
             raise FileNotFoundError(f"Dataset file not found: {self.filepath}")
@@ -34,8 +34,10 @@ class ERDataReader:
             self.df = pd.read_excel(self.filepath)
         elif filepath_str.endswith(".dta"):
             self.df = pd.read_stata(self.filepath)
+        elif filepath_str.endswith(".parquet"):
+            self.df = pd.read_parquet(self.filepath)
         else:
-            raise ValueError("Unsupported file type. Use .csv, .xlsx, or .dta")
+            raise ValueError("Unsupported file type. Use .csv, .xlsx, .dta, or .parquet")
 
         return self.df
 
