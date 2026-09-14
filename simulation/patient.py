@@ -55,11 +55,13 @@ class Patient(sim.Component):
         """
         if self.esi is None:
             if self.data is not None:
-                esi_levels, esi_weights, _interarrival_times, service_times_by_esi = self.data
+                esi_levels, esi_weights, _interarrival_times, _wait_times_by_esi, _lengths_of_visit_by_esi = self.data
                 self.esi = random.choices(esi_levels, weights=esi_weights, k=1)[0]
+
+                # NHAMCS does not provide a direct provider treatment/service time,
+                # so keep using the configured synthetic service-time distribution for now.
                 if self.service_time is None:
-                    times = service_times_by_esi.get(self.esi, [])
-                    self.service_time = random.choice(times) if times else cfg.MEAN_SERVICE_TIME
+                    self.service_time = random.expovariate(1.0 / cfg.MEAN_SERVICE_TIME)
             else:
                 # Fallback
                 self.esi = random.choices([1, 2, 3, 4, 5], weights=cfg.ESI_WEIGHTS_SYNTHETIC, k=1)[0]

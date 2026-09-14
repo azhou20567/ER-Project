@@ -19,7 +19,7 @@ class ArrivalGenerator(sim.Component):
             if self.data is not None:
                 # ArrivalGenerator only controls *when* patients arrive.
                 # ESI assignment happens during triage inside Patient.
-                _esi_levels, _esi_weights, interarrival_times, _service_times_by_esi = self.data
+                _esi_levels, _esi_weights, interarrival_times, _wait_times_by_esi, _lengths_of_visit_by_esi = self.data
                 sampled_interarrival = random.choice(interarrival_times) if interarrival_times else MEAN_ARRIVAL_TIME
 
             else:

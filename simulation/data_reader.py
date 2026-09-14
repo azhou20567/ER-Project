@@ -76,19 +76,18 @@ class ERDataReader:
         elif "triage" in self.df.columns:
             rename_map["triage"] = "esi"
 
-        # Map service time columns
-        if "los" in self.df.columns:
-            rename_map["los"] = "service_time"
-        elif "service_time" in self.df.columns:
-            rename_map["service_time"] = "service_time"
-        elif "waittime" in self.df.columns:
-            rename_map["waittime"] = "service_time"
+        # Map NHAMCS time fields using their actual meanings
+        if "waittime" in self.df.columns:
+            rename_map["waittime"] = "wait_time"
+
+        if "lov" in self.df.columns:
+            rename_map["lov"] = "length_of_visit"
 
         # Apply the renaming
         self.df = self.df.rename(columns=rename_map)
 
         # Check for required columns and raise error if missing
-        required = ["arrival_time", "esi", "service_time"]
+        required = ["arrival_time", "esi", "wait_time", "length_of_visit"]
         missing = [col for col in required if col not in self.df.columns]
         if missing:
             raise ValueError(f"Missing required columns after renaming: {missing}")
@@ -149,20 +148,24 @@ class ERDataReader:
 
         return self.df
 
-    def clean_esi_and_service_time(self):
-        # Convert ESI and service_time to numeric, coercing errors to NaN
+    def clean_esi_and_times(self):
+        # Convert ESI and observed time fields to numeric, coercing errors to NaN
         self.df["esi"] = pd.to_numeric(self.df["esi"], errors="coerce")
-        self.df["service_time"] = pd.to_numeric(self.df["service_time"], errors="coerce")
+        self.df["wait_time"] = pd.to_numeric(self.df["wait_time"], errors="coerce")
+        self.df["length_of_visit"] = pd.to_numeric(self.df["length_of_visit"], errors="coerce")
 
-        # Drop rows with missing ESI or service_time
-        self.df = self.df.dropna(subset=["esi", "service_time"])
+        # Drop rows with missing ESI or observed time fields
+        self.df = self.df.dropna(subset=["esi", "wait_time", "length_of_visit"])
         # Ensure ESI is integer
         self.df["esi"] = self.df["esi"].astype(int)
 
         # Keep only valid ESI levels (1-5)
         self.df = self.df[self.df["esi"].isin([1, 2, 3, 4, 5])]
-        # Ensure service_time is positive
-        self.df = self.df[self.df["service_time"] > 0]
+        # Keep valid wait times and visit lengths
+        self.df = self.df[
+            (self.df["wait_time"] >= 0) &
+            (self.df["length_of_visit"] > 0)
+        ]
 
         return self.df
 
@@ -172,7 +175,8 @@ class ERDataReader:
         - esi_levels: list of ESI levels
         - esi_weights: matching probabilities
         - interarrival_times: list of positive interarrival times in minutes
-        - service_times_by_esi: dict mapping ESI -> list of service times
+        - wait_times_by_esi: dict mapping ESI -> observed wait times
+        - lengths_of_visit_by_esi: dict mapping ESI -> observed total visit lengths
         """
         # Calculate ESI probabilities (weights for each level)
         esi_probs = self.df["esi"].value_counts(normalize=True).sort_index()
@@ -185,14 +189,26 @@ class ERDataReader:
         # Keep only positive gaps (ignore same-time or negative anomalies)
         interarrival_times = interarrival_times[interarrival_times > 0].tolist()
 
-        # Group service times by ESI level
-        service_times_by_esi = {}
-        for level in [1, 2, 3, 4, 5]:
-            times = self.df.loc[self.df["esi"] == level, "service_time"].tolist()
-            if times:
-                service_times_by_esi[level] = times
+        # Group observed wait times and total visit lengths by ESI level
+        wait_times_by_esi = {}
+        lengths_of_visit_by_esi = {}
 
-        return esi_levels, esi_weights, interarrival_times, service_times_by_esi
+        for level in [1, 2, 3, 4, 5]:
+            wait_times = self.df.loc[self.df["esi"] == level, "wait_time"].tolist()
+            visit_lengths = self.df.loc[self.df["esi"] == level, "length_of_visit"].tolist()
+
+            if wait_times:
+                wait_times_by_esi[level] = wait_times
+            if visit_lengths:
+                lengths_of_visit_by_esi[level] = visit_lengths
+
+        return (
+            esi_levels,
+            esi_weights,
+            interarrival_times,
+            wait_times_by_esi,
+            lengths_of_visit_by_esi,
+        )
 
     def load_and_prepare(self):
         """
@@ -203,5 +219,5 @@ class ERDataReader:
         self.clean_data()
         self.prepare_columns()
         self.convert_arrival_time_to_minutes()
-        self.clean_esi_and_service_time()
+        self.clean_esi_and_times()
         return self.build_distributions()
