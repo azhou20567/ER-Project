@@ -55,7 +55,7 @@ class Patient(sim.Component):
         """
         if self.esi is None:
             if self.data is not None:
-                esi_levels, esi_weights, _interarrival_times, _wait_times_by_esi, _lengths_of_visit_by_esi = self.data
+                esi_levels, esi_weights, _hourly_arrival_rates, _wait_times_by_esi, _lengths_of_visit_by_esi = self.data
                 self.esi = random.choices(esi_levels, weights=esi_weights, k=1)[0]
 
                 # NHAMCS does not provide a direct provider treatment/service time,

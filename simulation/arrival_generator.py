@@ -19,8 +19,20 @@ class ArrivalGenerator(sim.Component):
             if self.data is not None:
                 # ArrivalGenerator only controls *when* patients arrive.
                 # ESI assignment happens during triage inside Patient.
-                _esi_levels, _esi_weights, interarrival_times, _wait_times_by_esi, _lengths_of_visit_by_esi = self.data
-                sampled_interarrival = random.choice(interarrival_times) if interarrival_times else MEAN_ARRIVAL_TIME
+                _esi_levels, _esi_weights, hourly_arrival_rates, _wait_times_by_esi, _lengths_of_visit_by_esi = self.data
+                # Simulation time is minutes; time zero is midnight.
+                now = self.env.now()
+                hour = int(now // 60) % 24
+                minutes_to_boundary = 60 - now % 60
+                rate = hourly_arrival_rates[hour]
+                if rate <= 0:
+                    yield self.hold(minutes_to_boundary)
+                    continue
+                sampled_interarrival = random.expovariate(rate / 60)
+                if sampled_interarrival >= minutes_to_boundary:
+                    yield self.hold(minutes_to_boundary)
+                    continue
+                yield self.hold(sampled_interarrival)
 
             else:
                 # Synthetic mode: exponential interarrival times around the configured mean.
@@ -35,5 +47,6 @@ class ArrivalGenerator(sim.Component):
                 data=self.data
             )
 
-            # Wait until the next patient arrives (simulated time).
-            yield self.hold(sampled_interarrival)
+            # Preserve the existing timing in synthetic mode.
+            if self.data is None:
+                yield self.hold(sampled_interarrival)
