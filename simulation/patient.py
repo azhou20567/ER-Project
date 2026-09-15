@@ -132,7 +132,7 @@ class Patient(sim.Component):
         self._safe_move(self.env.q_wait_provider)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
-        yield self.request(self.providers, priority=self.esi)
+        yield self.request(self.providers, request_priority=self.esi)
         self._safe_move(self.env.q_in_treatment)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
