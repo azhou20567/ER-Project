@@ -155,3 +155,5 @@ class Patient(sim.Component):
 
         # Leave the last queue so the box disappears properly
         self._safe_move(None)
+        length_of_visit = self.env.now() - arrival_time
+        self.metrics.record_length_of_visit(self.esi, length_of_visit)
