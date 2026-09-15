@@ -96,6 +96,16 @@ class ERDataReader:
         self.df = self.df[required].copy()
         return self.df
 
+    def build_esi_probabilities(self):
+        # NHAMCS IMMEDR probabilities are PATWT-weighted, conditional on recorded levels 1-5.
+        levels = pd.to_numeric(self.df["immedr"], errors="coerce")
+        weights = pd.to_numeric(self.df["patwt"], errors="coerce")
+        valid = levels.isin([1, 2, 3, 4, 5]) & weights.gt(0) & weights.lt(float("inf"))
+        totals = weights[valid].groupby(levels[valid]).sum().reindex(range(1, 6), fill_value=0)
+        if totals.sum() <= 0:
+            raise ValueError("NHAMCS acuity probabilities require positive weights for IMMEDR 1-5")
+        self.esi_probs = totals / totals.sum()
+
     def build_hourly_arrival_rates(self):
         """Estimate a national mean ED profile from the full NHAMCS sample."""
         weights = pd.to_numeric(self.df["patwt"], errors="coerce")
@@ -149,10 +159,8 @@ class ERDataReader:
         - wait_times_by_esi: dict mapping ESI -> observed wait times
         - lengths_of_visit_by_esi: dict mapping ESI -> observed total visit lengths
         """
-        # Calculate ESI probabilities (weights for each level)
-        esi_probs = self.df["esi"].value_counts(normalize=True).sort_index()
-        esi_levels = esi_probs.index.tolist()
-        esi_weights = esi_probs.values.tolist()
+        esi_levels = self.esi_probs.index.tolist()
+        esi_weights = self.esi_probs.values.tolist()
 
         # Group observed wait times and total visit lengths by ESI level
         wait_times_by_esi = {}
@@ -182,6 +190,7 @@ class ERDataReader:
         """
         self.load_data()
         self.clean_data()
+        self.build_esi_probabilities()
         self.build_hourly_arrival_rates()
         self.prepare_columns()
         self.clean_esi_and_times()
