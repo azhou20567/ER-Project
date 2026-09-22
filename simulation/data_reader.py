@@ -21,7 +21,7 @@ class ERDataReader:
     def load_data(self):
         """
         Loads data from the specified file based on its extension.
-        Supports CSV, Excel (.xlsx), and Stata (.dta) formats.
+        Supports CSV, Excel (.xlsx), Stata (.dta), and Parquet formats.
         """
         if not self.filepath.exists():
             raise FileNotFoundError(f"Dataset file not found: {self.filepath}")
@@ -34,8 +34,10 @@ class ERDataReader:
             self.df = pd.read_excel(self.filepath)
         elif filepath_str.endswith(".dta"):
             self.df = pd.read_stata(self.filepath)
+        elif filepath_str.endswith(".parquet"):
+            self.df = pd.read_parquet(self.filepath)
         else:
-            raise ValueError("Unsupported file type. Use .csv, .xlsx, or .dta")
+            raise ValueError("Unsupported file type. Use .csv, .xlsx, .dta, or .parquet")
 
         return self.df
 
@@ -74,19 +76,18 @@ class ERDataReader:
         elif "triage" in self.df.columns:
             rename_map["triage"] = "esi"
 
-        # Map service time columns
-        if "los" in self.df.columns:
-            rename_map["los"] = "service_time"
-        elif "service_time" in self.df.columns:
-            rename_map["service_time"] = "service_time"
-        elif "waittime" in self.df.columns:
-            rename_map["waittime"] = "service_time"
+        # Map NHAMCS time fields using their actual meanings
+        if "waittime" in self.df.columns:
+            rename_map["waittime"] = "wait_time"
+
+        if "lov" in self.df.columns:
+            rename_map["lov"] = "length_of_visit"
 
         # Apply the renaming
         self.df = self.df.rename(columns=rename_map)
 
         # Check for required columns and raise error if missing
-        required = ["arrival_time", "esi", "service_time"]
+        required = ["arrival_time", "esi", "wait_time", "length_of_visit"]
         missing = [col for col in required if col not in self.df.columns]
         if missing:
             raise ValueError(f"Missing required columns after renaming: {missing}")
@@ -95,72 +96,57 @@ class ERDataReader:
         self.df = self.df[required].copy()
         return self.df
 
-    def convert_arrival_time_to_minutes(self):
-        """
-        Converts arrival times into minutes after midnight.
+    def build_esi_probabilities(self):
+        # NHAMCS IMMEDR probabilities are PATWT-weighted, conditional on recorded levels 1-5.
+        levels = pd.to_numeric(self.df["immedr"], errors="coerce")
+        weights = pd.to_numeric(self.df["patwt"], errors="coerce")
+        valid = levels.isin([1, 2, 3, 4, 5]) & weights.gt(0) & weights.lt(float("inf"))
+        totals = weights[valid].groupby(levels[valid]).sum().reindex(range(1, 6), fill_value=0)
+        if totals.sum() <= 0:
+            raise ValueError("NHAMCS acuity probabilities require positive weights for IMMEDR 1-5")
+        self.esi_probs = totals / totals.sum()
 
-        Handles:
-        - numeric HHMM values like 930, 1545
-        - strings like '09:30'
-        """
-        def hhmm_to_minutes(value):
-            if pd.isna(value):
-                return None
+    def build_hourly_arrival_rates(self):
+        """Estimate a national mean ED profile from the full NHAMCS sample."""
+        weights = pd.to_numeric(self.df["patwt"], errors="coerce")
+        ed_weights = pd.to_numeric(self.df["edwt"], errors="coerce")
+        times = self.df["arrtime"].astype("string")
+        hhmm = pd.to_numeric(times, errors="coerce")
+        valid = (
+            times.str.fullmatch(r"\d{4}", na=False)
+            & hhmm.floordiv(100).between(0, 23)
+            & hhmm.mod(100).between(0, 59)
+        )
+        hourly_weights = weights[valid].groupby(
+            hhmm[valid].floordiv(100).astype(int)
+        ).sum().reindex(range(24), fill_value=0)
+        if ed_weights[ed_weights > 0].sum() <= 0 or hourly_weights.sum() <= 0:
+            raise ValueError("NHAMCS arrival rates require positive ED and valid-time visit weights")
+        daily_mean = weights.sum() / ed_weights[ed_weights > 0].sum() / 365
+        # Redistribute unknown-time visits using the known-time profile.
+        # This models a national mean ED, not a particular hospital.
+        self.hourly_arrival_rates = (daily_mean * hourly_weights / hourly_weights.sum()).tolist()
+        # Preserve the existing valid-arrival-time subset for clinical distributions.
+        self.df = self.df.loc[valid].copy()
 
-            # Handle numeric style: 930 (9:30), 1545 (15:45)
-            if isinstance(value, (int, float)):
-                value = int(value)
-                hours = value // 100
-                minutes = value % 100
-                if 0 <= hours <= 23 and 0 <= minutes <= 59:
-                    return hours * 60 + minutes
-                return None
-
-            # Handle string style: "09:30"
-            value = str(value).strip()
-            if ":" in value:
-                parts = value.split(":")
-                if len(parts) >= 2:
-                    try:
-                        hours = int(parts[0])
-                        minutes = int(parts[1])
-                        if 0 <= hours <= 23 and 0 <= minutes <= 59:
-                            return hours * 60 + minutes
-                    except ValueError:
-                        return None
-            # Fallback: maybe string numeric like "930"
-            try:
-                numeric_value = int(value)
-                hours = numeric_value // 100
-                minutes = numeric_value % 100
-                if 0 <= hours <= 23 and 0 <= minutes <= 59:
-                    return hours * 60 + minutes
-            except ValueError:
-                return None
-
-            return None
-
-        # Apply the conversion function to create a new column
-        self.df["arrival_minutes"] = self.df["arrival_time"].apply(hhmm_to_minutes)
-        # Drop rows with invalid arrival times
-        self.df = self.df.dropna(subset=["arrival_minutes"])
-
-        return self.df
-
-    def clean_esi_and_service_time(self):
-        # Convert ESI and service_time to numeric, coercing errors to NaN
+    def clean_esi_and_times(self):
+        # Convert ESI and observed time fields to numeric, coercing errors to NaN
         self.df["esi"] = pd.to_numeric(self.df["esi"], errors="coerce")
-        self.df["service_time"] = pd.to_numeric(self.df["service_time"], errors="coerce")
+        self.df["wait_time"] = pd.to_numeric(self.df["wait_time"], errors="coerce")
+        self.df["length_of_visit"] = pd.to_numeric(self.df["length_of_visit"], errors="coerce")
 
-        # Drop rows with missing ESI or service_time
-        self.df = self.df.dropna(subset=["esi", "service_time"])
+        # Drop rows with missing ESI or observed time fields
+        self.df = self.df.dropna(subset=["esi", "wait_time", "length_of_visit"])
         # Ensure ESI is integer
         self.df["esi"] = self.df["esi"].astype(int)
 
         # Keep only valid ESI levels (1-5)
         self.df = self.df[self.df["esi"].isin([1, 2, 3, 4, 5])]
-        # Ensure service_time is positive
-        self.df = self.df[self.df["service_time"] > 0]
+        # Keep valid wait times and visit lengths
+        self.df = self.df[
+            (self.df["wait_time"] >= 0) &
+            (self.df["length_of_visit"] > 0)
+        ]
 
         return self.df
 
@@ -169,37 +155,43 @@ class ERDataReader:
         Returns:
         - esi_levels: list of ESI levels
         - esi_weights: matching probabilities
-        - interarrival_times: list of positive interarrival times in minutes
-        - service_times_by_esi: dict mapping ESI -> list of service times
+        - hourly_arrival_rates: expected arrivals per hour, indexed 0-23
+        - wait_times_by_esi: dict mapping ESI -> observed wait times
+        - lengths_of_visit_by_esi: dict mapping ESI -> observed total visit lengths
         """
-        # Calculate ESI probabilities (weights for each level)
-        esi_probs = self.df["esi"].value_counts(normalize=True).sort_index()
-        esi_levels = esi_probs.index.tolist()
-        esi_weights = esi_probs.values.tolist()
+        esi_levels = self.esi_probs.index.tolist()
+        esi_weights = self.esi_probs.values.tolist()
 
-        # Calculate interarrival times: sort by arrival time and compute differences
-        sorted_arrivals = self.df.sort_values("arrival_minutes")
-        interarrival_times = sorted_arrivals["arrival_minutes"].diff().dropna()
-        # Keep only positive gaps (ignore same-time or negative anomalies)
-        interarrival_times = interarrival_times[interarrival_times > 0].tolist()
+        # Group observed wait times and total visit lengths by ESI level
+        wait_times_by_esi = {}
+        lengths_of_visit_by_esi = {}
 
-        # Group service times by ESI level
-        service_times_by_esi = {}
         for level in [1, 2, 3, 4, 5]:
-            times = self.df.loc[self.df["esi"] == level, "service_time"].tolist()
-            if times:
-                service_times_by_esi[level] = times
+            wait_times = self.df.loc[self.df["esi"] == level, "wait_time"].tolist()
+            visit_lengths = self.df.loc[self.df["esi"] == level, "length_of_visit"].tolist()
 
-        return esi_levels, esi_weights, interarrival_times, service_times_by_esi
+            if wait_times:
+                wait_times_by_esi[level] = wait_times
+            if visit_lengths:
+                lengths_of_visit_by_esi[level] = visit_lengths
+
+        return (
+            esi_levels,
+            esi_weights,
+            self.hourly_arrival_rates,
+            wait_times_by_esi,
+            lengths_of_visit_by_esi,
+        )
 
     def load_and_prepare(self):
         """
-        Runs the full data processing pipeline: load, clean, prepare, convert, and build distributions.
+        Runs the full data processing pipeline: load, clean, estimate arrivals, and build clinical distributions.
         Returns the computed distributions for simulation.
         """
         self.load_data()
         self.clean_data()
+        self.build_esi_probabilities()
+        self.build_hourly_arrival_rates()
         self.prepare_columns()
-        self.convert_arrival_time_to_minutes()
-        self.clean_esi_and_service_time()
+        self.clean_esi_and_times()
         return self.build_distributions()
