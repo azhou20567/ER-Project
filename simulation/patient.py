@@ -11,10 +11,12 @@ class Patient(sim.Component):
         self.metrics = metrics
 
         # If esi/service_time are provided explicitly, use them.
-        # Otherwise, determine ESI during triage and sample service time after ESI is known.
+        # Otherwise, assign ESI now and determine service time after triage.
+        self._esi_provided = esi is not None
         self.esi = esi
         self.service_time = service_time
         self.data = data
+        self._assign_esi()
 
     def _safe_move(self, new_queue):
         # Safely transition this patient to a new animation queue.
@@ -46,30 +48,25 @@ class Patient(sim.Component):
         if entered_new:
             self._anim_queue = new_queue
 
-    def _assign_esi_and_service_time(self):
-        """
-        Assign triage category (ESI) and sample a service time.
- 
-        Called after triage completes, matching real-world flow:
-        patient arrives -> triage assessment -> ESI assigned -> waits for provider.
-        """
+    def _assign_esi(self):
+        """Assign acuity at patient creation, preserving an explicit ESI."""
         if self.esi is None:
             if self.data is not None:
                 esi_levels, esi_weights, _hourly_arrival_rates, _wait_times_by_esi, _lengths_of_visit_by_esi = self.data
                 self.esi = random.choices(esi_levels, weights=esi_weights, k=1)[0]
-
-                # NHAMCS does not provide a direct provider treatment/service time,
-                # so keep using the configured synthetic service-time distribution for now.
-                if self.service_time is None:
-                    self.service_time = random.expovariate(1.0 / cfg.MEAN_SERVICE_TIME)
             else:
                 # Fallback
                 self.esi = random.choices([1, 2, 3, 4, 5], weights=cfg.ESI_WEIGHTS_SYNTHETIC, k=1)[0]
-                if self.service_time is None:
-                    self.service_time = random.expovariate(1.0 / cfg.MEAN_SERVICE_TIME)
- 
+
+    def _assign_service_time(self):
+        """Determine service time after triage, preserving an explicit duration."""
         if self.service_time is None:
-            self.service_time = cfg.MEAN_SERVICE_TIME
+            if self._esi_provided:
+                # Preserve the existing fallback for an explicitly supplied ESI.
+                self.service_time = cfg.MEAN_SERVICE_TIME
+            else:
+                # NHAMCS has no direct provider service time; use the synthetic distribution.
+                self.service_time = random.expovariate(1.0 / cfg.MEAN_SERVICE_TIME)
 
     def animation_objects(self, *args, **kwargs):
         # Salabim passes `screen_coordinates` from AnimateQueue.
@@ -124,8 +121,8 @@ class Patient(sim.Component):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
         yield self.hold(random.expovariate(1.0 / cfg.MEAN_TRIAGE_TIME))
         self.release(self.triage)
-        # After triage completes, assign ESI
-        self._assign_esi_and_service_time()
+        # After triage completes, assign service time.
+        self._assign_service_time()
  
         # PROVIDER
         # Lower priority value = served first, so ESI 1 (most critical) wins.
