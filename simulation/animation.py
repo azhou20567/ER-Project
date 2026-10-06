@@ -71,8 +71,9 @@ def setup_animation(env):
 
     This animates which Patient components enter/leave as they progress:
     - q_wait_triage, q_in_triage
-    - q_wait_provider, q_in_treatment
-    - q_wait_bed, q_in_bed
+    - q_wait_bed
+    - q_wait_provider, q_in_treatment (bed held)
+    - q_in_bed (post-provider additional care, bed held)
     """
     _try_animation_kwargs(env)
     _try_set_animation_parameters(env)
@@ -96,10 +97,10 @@ def setup_animation(env):
     sections = [
         ("Waiting for triage", env.q_wait_triage),
         ("In triage", env.q_in_triage),
-        ("Waiting for provider", env.q_wait_provider),
-        ("In treatment", env.q_in_treatment),
-        ("Waiting for bed", env.q_wait_bed),
-        ("In bed", env.q_in_bed),
+        ("Waiting for ED bed", env.q_wait_bed),
+        ("Waiting for provider (bed held)", env.q_wait_provider),
+        ("Provider care (bed held)", env.q_in_treatment),
+        ("Additional care (bed held)", env.q_in_bed),
     ]
 
     for i, (title, queue) in enumerate(sections):

@@ -124,6 +124,13 @@ class Patient(sim.Component):
         # After triage completes, assign service time.
         self._assign_service_time()
  
+        # BED / TREATMENT SPACE
+        # Retain the bed through provider waiting, provider care, and additional care.
+        self._safe_move(self.env.q_wait_bed)
+        if getattr(cfg, "ANIMATE", False):
+            yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
+        yield self.request(self.beds, request_priority=self.esi)
+
         # PROVIDER
         # Lower priority value = served first, so ESI 1 (most critical) wins.
         self._safe_move(self.env.q_wait_provider)
@@ -139,11 +146,7 @@ class Patient(sim.Component):
         yield self.hold(self.service_time)
         self.release(self.providers)
  
-        # BED
-        self._safe_move(self.env.q_wait_bed)
-        if getattr(cfg, "ANIMATE", False):
-            yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
-        yield self.request(self.beds)
+        # ADDITIONAL CARE (bed remains held after provider release)
         self._safe_move(self.env.q_in_bed)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
