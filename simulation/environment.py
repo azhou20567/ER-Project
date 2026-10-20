@@ -10,7 +10,6 @@ def create_environment():
     env.q_wait_provider = sim.Queue("q_wait_provider")
     env.q_in_treatment = sim.Queue("q_in_treatment")
     env.q_wait_bed = sim.Queue("q_wait_bed")
-    env.q_in_bed = sim.Queue("q_in_bed")
     env.q_wait_testing = sim.Queue("q_wait_testing")
     env.q_in_testing = sim.Queue("q_in_testing")
     env.q_wait_diagnosis = sim.Queue("q_wait_diagnosis")

@@ -72,8 +72,12 @@ def setup_animation(env):
     This animates which Patient components enter/leave as they progress:
     - q_wait_triage, q_in_triage
     - q_wait_bed
-    - q_wait_provider, q_in_treatment (bed held)
-    - q_in_bed (post-provider additional care, bed held)
+    - q_wait_provider, q_in_treatment (examination)
+    - q_wait_testing, q_in_testing (Test components, not patients)
+    - q_wait_diagnosis, q_in_diagnosis
+    - q_wait_treatment, q_in_treatment_stage
+    - q_wait_discharge, q_in_discharge
+    Every stage after the ED bed is entered with the bed held.
     """
     _try_animation_kwargs(env)
     _try_set_animation_parameters(env)
@@ -88,23 +92,41 @@ def setup_animation(env):
         textcolor=white,
     )
 
-    # Layout: keep all 6 stages visible.
-    x0 = 12
+    _animate_text(
+        "Stages after the ED bed hold a bed; grey circles are tests",
+        x=350,
+        y=30,
+        fontsize=10,
+        xy_anchor="ne",
+        textcolor=white,
+    )
+
+    # Layout: two columns so all 13 stages are visible.
+    column_width = 512
+    rows_per_column = 7
     title_gap = 14
     step = 72
-    y0 = 28
+    y0 = 56
 
     sections = [
         ("Waiting for triage", env.q_wait_triage),
         ("In triage", env.q_in_triage),
         ("Waiting for ED bed", env.q_wait_bed),
-        ("Waiting for provider (bed held)", env.q_wait_provider),
-        ("Provider care (bed held)", env.q_in_treatment),
-        ("Additional care (bed held)", env.q_in_bed),
+        ("Waiting for examination", env.q_wait_provider),
+        ("Examination", env.q_in_treatment),
+        ("Tests waiting for equipment", env.q_wait_testing),
+        ("Tests running", env.q_in_testing),
+        ("Waiting for diagnosis", env.q_wait_diagnosis),
+        ("Diagnosis", env.q_in_diagnosis),
+        ("Waiting for treatment", env.q_wait_treatment),
+        ("Treatment", env.q_in_treatment_stage),
+        ("Waiting for discharge", env.q_wait_discharge),
+        ("Discharge / transfer", env.q_in_discharge),
     ]
 
     for i, (title, queue) in enumerate(sections):
-        y_title = y0 + i * step
+        x0 = 12 + (i // rows_per_column) * column_width
+        y_title = y0 + (i % rows_per_column) * step
         y_queue = y_title + title_gap
 
         # Show live counts so we can verify patients are entering later queues.

@@ -40,23 +40,46 @@ class PatientWorkflowTests(unittest.TestCase):
         )
         sampling.start()
         self.addCleanup(sampling.stop)
+        # Stage durations come from Patient._sample(stage, esi); give each stage a fixed length.
+        stage_sampling = patch.object(Patient, "_sample", side_effect=self.sample_stage)
+        stage_sampling.start()
+        self.addCleanup(stage_sampling.stop)
+        # By default no patient needs treatment (0.99 is above every ESI's probability).
+        self.treatment_roll = 0.99
+        treatment = patch(
+            "simulation.patient.random.random", side_effect=lambda: self.treatment_roll
+        )
+        treatment.start()
+        self.addCleanup(treatment.stop)
         self.animation_queues = [
             self.env.q_wait_triage,
             self.env.q_in_triage,
             self.env.q_wait_bed,
             self.env.q_wait_provider,
             self.env.q_in_treatment,
-            self.env.q_in_bed,
+            self.env.q_wait_testing,
+            self.env.q_in_testing,
+            self.env.q_wait_diagnosis,
+            self.env.q_in_diagnosis,
+            self.env.q_wait_treatment,
+            self.env.q_in_treatment_stage,
+            self.env.q_wait_discharge,
+            self.env.q_in_discharge,
         ]
 
     def sample_duration(self, rate):
-        self.samples.append((self.env.now(), rate))
+        # Only triage still samples expovariate directly.
+        self.samples.append((self.env.now(), "triage"))
         durations = {
             1.0 / cfg.MEAN_TRIAGE_TIME: 1.0,
-            1.0 / cfg.MEAN_SERVICE_TIME: 3.0,
-            1.0 / cfg.MEAN_BED_TIME: 4.0,
         }
         return durations[rate]
+
+    def sample_stage(self, stage, esi):
+        self.samples.append((self.env.now(), stage))
+        # Testing + diagnosis + discharge = 4, the old "additional care" length.
+        durations = {"exam": 3.0, "test": 2.0, "diagnosis": 1.0, "treatment": 2.0, "discharge": 1.0}
+        return durations[stage]
 
     def patient(self, esi=3, service_time=3.0, **kwargs):
         return Patient(
@@ -79,12 +102,14 @@ class PatientWorkflowTests(unittest.TestCase):
         self.assertEqual(patient in self.triage.claimers(), triage)
         self.assertEqual(patient in self.providers.claimers(), provider)
         self.assertEqual(patient in self.beds.claimers(), bed)
+        # Testing equipment is only ever claimed by the linked Test, never the patient.
+        self.assertNotIn(patient, self.env.testing_equipment.claimers())
 
     def assert_departed(self, *patients):
         for patient in patients:
             self.assertIsNone(patient._anim_queue)
             self.assertEqual(patient.queues(), set())
-        for resource in (self.triage, self.providers, self.beds):
+        for resource in (self.triage, self.providers, self.beds, self.env.testing_equipment):
             self.assertEqual(resource.claimed_quantity(), 0)
             self.assertEqual(len(resource.requesters()), 0)
             self.assertEqual(len(resource.claimers()), 0)
@@ -118,14 +143,20 @@ class PatientWorkflowTests(unittest.TestCase):
         self.assertEqual(self.metrics.wait_times[3], [11.0])
         self.assertEqual(self.metrics.lengths_of_visit[3], [])
 
-        # Provider care ends at 14; additional care occupies the bed until 18.
+        # Exam ends at 14; testing 14-16, diagnosis 16-17, discharge 17-18, all with the bed held.
         self.env.run(till=14.5)
         self.assert_claims(patient, bed=True)
-        self.assertIn(patient, self.env.q_in_bed)
+        self.assertEqual(len(self.env.q_in_testing), 1)
         self.assertEqual(self.providers.claimed_quantity(), 0)
         self.assertEqual(self.metrics.lengths_of_visit[3], [])
+        self.env.run(till=16.5)
+        self.assert_claims(patient, provider=True, bed=True)
+        self.assertIn(patient, self.env.q_in_diagnosis)
+        self.env.run(till=17.5)
+        self.assert_claims(patient, triage=True, bed=True)
+        self.assertIn(patient, self.env.q_in_discharge)
         self.env.run(till=17.9)
-        self.assert_claims(patient, bed=True)
+        self.assert_claims(patient, triage=True, bed=True)
         self.assertEqual(self.metrics.lengths_of_visit[3], [])
 
         self.env.run(till=18.1)
@@ -231,20 +262,109 @@ class PatientWorkflowTests(unittest.TestCase):
         self.env.run(till=2)
         self.assertEqual(patient.service_time, 3.0)
         self.assert_claims(patient)
-        self.assertEqual(
-            self.samples,
-            [(0.0, 1.0 / cfg.MEAN_TRIAGE_TIME), (1.0, 1.0 / cfg.MEAN_SERVICE_TIME)],
-        )
+        self.assertEqual(self.samples, [(0.0, "triage"), (1.0, "exam")])
         self.env.run(till=13.9)
         self.assertEqual(len(self.samples), 2)
         self.env.run(till=14.1)
         self.assert_claims(patient, bed=True)
-        self.assertEqual(self.samples[-1], (14.0, 1.0 / cfg.MEAN_BED_TIME))
+        self.assertEqual(self.samples[-1], (14.0, "test"))
 
         self.env.run(till=18.1)
+        self.assertEqual(
+            self.samples,
+            [(0.0, "triage"), (1.0, "exam"), (14.0, "test"), (16.0, "diagnosis"), (17.0, "discharge")],
+        )
         self.assertEqual(self.metrics.wait_times[2], [11.0])
         self.assertEqual(self.metrics.lengths_of_visit[2], [18.0])
         self.assert_departed(patient)
+
+    def test_linked_test_holds_equipment_while_patient_keeps_bed(self):
+        patient = self.patient()
+
+        # Triage 0-1, exam 1-4, then the Test runs 4-6.
+        self.env.run(till=5)
+        self.assert_claims(patient, bed=True)
+        (test,) = self.env.testing_equipment.claimers()
+        self.assertIs(test.patient, patient)
+        self.assertIn(test, self.env.q_in_testing)
+        self.assertIsNone(patient._anim_queue)
+        self.assertFalse(patient.testing_done())
+
+        self.env.run(till=6.5)
+        self.assertTrue(patient.testing_done())
+        self.assertEqual(self.env.testing_equipment.claimed_quantity(), 0)
+        self.assert_claims(patient, provider=True, bed=True)
+
+        self.env.run(till=9)
+        self.assertEqual(self.metrics.lengths_of_visit[3], [8.0])
+        self.assert_departed(patient)
+
+    def test_diagnosis_waits_for_testing_done(self):
+        self.env.testing_equipment.set_capacity(1)
+        self.block(self.env.testing_equipment, 10)
+        patient = self.patient()
+
+        # The exam ends at 4 but equipment is busy until 10; the provider is idle meanwhile.
+        self.env.run(till=11)
+        self.assert_claims(patient, bed=True)
+        self.assertNotIn(patient, self.providers.requesters())
+        self.assertEqual(self.providers.claimed_quantity(), 0)
+        self.assertFalse(patient.testing_done())
+
+        self.env.run(till=12.5)
+        self.assert_claims(patient, provider=True, bed=True)
+        self.assertEqual(self.metrics.stage_waits["testing"][3], [6.0])
+
+        self.env.run(till=15)
+        self.assertEqual(self.metrics.lengths_of_visit[3], [14.0])
+        self.assert_departed(patient)
+
+    def test_treatment_depends_on_esi_probability(self):
+        # 0.5 is below ESI 2's treatment probability (0.8) and above ESI 4's (0.25).
+        self.treatment_roll = 0.5
+        self.beds.set_capacity(2)
+        treated = self.patient(esi=2)
+        untreated = self.patient(esi=4, at=20)
+
+        # Treated: triage 0-1, exam 1-4, test 4-6, diagnosis 6-7, treatment 7-9, discharge 9-10.
+        self.env.run(till=8)
+        self.assert_claims(treated, triage=True, bed=True)
+        self.assertIn(treated, self.env.q_in_treatment_stage)
+
+        self.env.run(till=40)
+        self.assertEqual(self.metrics.lengths_of_visit[2], [10.0])
+        self.assertEqual(self.metrics.lengths_of_visit[4], [8.0])
+        self.assertEqual(self.metrics.stage_waits["treatment"][2], [0.0])
+        self.assertEqual(self.metrics.stage_waits["treatment"][4], [])
+        self.assert_departed(treated, untreated)
+
+    def test_treatment_skipped_when_not_needed(self):
+        patient = self.patient(esi=1)
+
+        self.env.run(till=10)
+        self.assertNotIn("treatment", self.metrics.stage_waits)
+        self.assertEqual(self.metrics.lengths_of_visit[1], [8.0])
+        self.assert_departed(patient)
+
+    def test_shared_nurse_serves_discharge_before_same_acuity_triage(self):
+        # Patient in bed reaches discharge at 7; a new arrival asks for triage first, at 6.5.
+        in_bed = self.patient()
+        ResourceHolder(held_resource=self.triage, hold_duration=4, at=6, env=self.env)
+        arriving = self.patient(at=6.5)
+
+        self.env.run(till=9)
+        self.assertIn(in_bed, self.triage.requesters())
+        self.assertIn(arriving, self.triage.requesters())
+
+        # The nurse frees up at 10 and goes to the discharge, despite the earlier triage request.
+        self.env.run(till=10.1)
+        self.assert_claims(in_bed, triage=True, bed=True)
+        self.assertIn(arriving, self.triage.requesters())
+
+        self.env.run(till=25)
+        # Arriving: triage 11-12, bed at 12 (freed at 11), then exam/test/diagnosis/discharge until 19.
+        self.assertEqual(self.metrics.lengths_of_visit[3], [11.0, 12.5])
+        self.assert_departed(in_bed, arriving)
 
 
 if __name__ == "__main__":

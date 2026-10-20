@@ -1,6 +1,7 @@
 import random
 import salabim as sim
 import config as cfg
+from simulation.test import Test
 
 
 class Patient(sim.Component):
@@ -59,14 +60,29 @@ class Patient(sim.Component):
                 self.esi = random.choices([1, 2, 3, 4, 5], weights=cfg.ESI_WEIGHTS_SYNTHETIC, k=1)[0]
 
     def _assign_service_time(self):
-        """Determine service time after triage, preserving an explicit duration."""
+        """Determine examination time after triage, preserving an explicit duration."""
         if self.service_time is None:
             if self._esi_provided:
                 # Preserve the existing fallback for an explicitly supplied ESI.
-                self.service_time = cfg.MEAN_SERVICE_TIME
+                self.service_time = cfg.MEAN_EXAM_TIME_BY_ESI[self.esi]
             else:
                 # NHAMCS has no direct provider service time; use the synthetic distribution.
-                self.service_time = random.expovariate(1.0 / cfg.MEAN_SERVICE_TIME)
+                self.service_time = self._sample("exam", self.esi)
+
+    def _sample(self, stage, esi):
+        """Sample a stage duration from that stage's per-ESI mean (config.py)."""
+        means = {
+            "exam": cfg.MEAN_EXAM_TIME_BY_ESI,
+            "test": cfg.MEAN_TEST_TIME_BY_ESI,
+            "diagnosis": cfg.MEAN_DIAGNOSIS_TIME_BY_ESI,
+            "treatment": cfg.MEAN_TREATMENT_TIME_BY_ESI,
+            "discharge": cfg.MEAN_DISCHARGE_TIME_BY_ESI,
+        }
+        return random.expovariate(1.0 / means[stage][esi])
+
+    def _priority(self, stage):
+        """Request priority for shared staff (lower value is served first)."""
+        return self.esi * 10 + cfg.STAGE_PRIORITY_WEIGHT[stage]
 
     def animation_objects(self, *args, **kwargs):
         # Salabim passes `screen_coordinates` from AnimateQueue.
@@ -115,7 +131,9 @@ class Patient(sim.Component):
         self._safe_move(self.env.q_wait_triage)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
-        yield self.request(self.triage)
+        stage_start = self.env.now()
+        yield self.request(self.triage, request_priority=self._priority("triage"))
+        self.metrics.record_stage_wait("triage", self.esi, self.env.now() - stage_start)
         self._safe_move(self.env.q_in_triage)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
@@ -125,32 +143,78 @@ class Patient(sim.Component):
         self._assign_service_time()
  
         # BED / TREATMENT SPACE
-        # Retain the bed through provider waiting, provider care, and additional care.
+        # Retain the bed through examination, testing, diagnosis, treatment, and discharge.
         self._safe_move(self.env.q_wait_bed)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
+        stage_start = self.env.now()
         yield self.request(self.beds, request_priority=self.esi)
+        self.metrics.record_stage_wait("bed", self.esi, self.env.now() - stage_start)
 
-        # PROVIDER
+        # EXAMINATION (provider)
         # Lower priority value = served first, so ESI 1 (most critical) wins.
         self._safe_move(self.env.q_wait_provider)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
-        yield self.request(self.providers, request_priority=self.esi)
+        stage_start = self.env.now()
+        yield self.request(self.providers, request_priority=self._priority("exam"))
+        self.metrics.record_stage_wait("exam", self.esi, self.env.now() - stage_start)
         self._safe_move(self.env.q_in_treatment)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
         wait_time = self.env.now() - arrival_time
         self.metrics.record_wait_time(self.esi, wait_time)
- 
+
         yield self.hold(self.service_time)
         self.release(self.providers)
- 
-        # ADDITIONAL CARE (bed remains held after provider release)
-        self._safe_move(self.env.q_in_bed)
+
+        # TESTING (bed stays held; the linked Test claims testing_equipment on its own)
+        # The patient leaves the animation lanes while its Test is shown in the testing lanes.
+        self._safe_move(None)
+        self.testing_done = sim.State("testing_done", value=False)
+        stage_start = self.env.now()
+        test = Test(
+            patient=self,
+            testing_equipment=self.env.testing_equipment,
+            duration=self._sample("test", self.esi),
+        )
+        yield self.wait(self.testing_done)
+        # Time spent waiting for equipment = elapsed testing time minus the test itself.
+        self.metrics.record_stage_wait("testing", self.esi, max(0.0, self.env.now() - stage_start - test.duration))
+
+        # DIAGNOSIS (provider)
+        self._safe_move(self.env.q_wait_diagnosis)
         if getattr(cfg, "ANIMATE", False):
             yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
-        yield self.hold(random.expovariate(1.0 / cfg.MEAN_BED_TIME))
+        stage_start = self.env.now()
+        yield self.request(self.providers, request_priority=self._priority("diagnosis"))
+        self.metrics.record_stage_wait("diagnosis", self.esi, self.env.now() - stage_start)
+        self._safe_move(self.env.q_in_diagnosis)
+        yield self.hold(self._sample("diagnosis", self.esi))
+        self.release(self.providers)
+
+        # TREATMENT (nurse, only for some patients; sicker patients need it more often)
+        if random.random() < cfg.TREATMENT_PROBABILITY_BY_ESI[self.esi]:
+            self._safe_move(self.env.q_wait_treatment)
+            if getattr(cfg, "ANIMATE", False):
+                yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
+            stage_start = self.env.now()
+            yield self.request(self.triage, request_priority=self._priority("treatment"))
+            self.metrics.record_stage_wait("treatment", self.esi, self.env.now() - stage_start)
+            self._safe_move(self.env.q_in_treatment_stage)
+            yield self.hold(self._sample("treatment", self.esi))
+            self.release(self.triage)
+
+        # DISCHARGE / TRANSFER (nurse), then the bed is finally released
+        self._safe_move(self.env.q_wait_discharge)
+        if getattr(cfg, "ANIMATE", False):
+            yield self.hold(getattr(cfg, "ANIMATION_STAGE_PAUSE", 0))
+        stage_start = self.env.now()
+        yield self.request(self.triage, request_priority=self._priority("discharge"))
+        self.metrics.record_stage_wait("discharge", self.esi, self.env.now() - stage_start)
+        self._safe_move(self.env.q_in_discharge)
+        yield self.hold(self._sample("discharge", self.esi))
+        self.release(self.triage)
         self.release(self.beds)
 
         # Leave the last queue so the box disappears properly
