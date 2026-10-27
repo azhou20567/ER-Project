@@ -2,6 +2,7 @@ import random
 import salabim as sim
 import config as cfg
 from simulation.test import Test
+from simulation.esi import ESI_COLORS
 
 
 class Patient(sim.Component):
@@ -84,20 +85,17 @@ class Patient(sim.Component):
         """Request priority for shared staff (lower value is served first)."""
         return self.esi * 10 + cfg.STAGE_PRIORITY_WEIGHT[stage]
 
-    def animation_objects(self, *args, **kwargs):
-        # Salabim passes `screen_coordinates` from AnimateQueue.
+    def animation_objects(self, *args, id=None, **kwargs):
+        # Salabim passes `screen_coordinates` and the queue animation's `id` from AnimateQueue.
         screen_coordinates = kwargs.get("screen_coordinates", True)
+        # Waiting patients are drawn as outlines; patients being served are solid.
+        waiting = id == "waiting"
+
+        def esi_color(_t=None):
+            return ESI_COLORS.get(getattr(self, "esi", None), "#d0d0d0")
 
         def fill(_t=None):
-            if getattr(self, "esi", None) is None:
-                return "#d0d0d0"
-            return {
-                1: "#e53935",  # red
-                2: "#fb8c00",  # orange
-                3: "#fdd835",  # yellow/gold
-                4: "#81d4fa",  # light blue
-                5: "#a5d6a7",  # light green
-            }.get(self.esi, "#d0d0d0")
+            return "#000000" if waiting else esi_color()
 
         def label(_t=None):
             if getattr(self, "esi", None) is None:
@@ -107,10 +105,10 @@ class Patient(sim.Component):
         rect_kwargs = dict(
             spec=(-13, -8, 13, 8),
             fillcolor=fill,
-            linecolor="black",
-            linewidth=1,
+            linecolor=esi_color if waiting else "black",
+            linewidth=2 if waiting else 1,
             text=label,
-            textcolor="black",
+            textcolor=esi_color if waiting else "black",
             # Let Salabim decide whether these are screen/world coordinates for this queue.
             screen_coordinates=screen_coordinates,
         )
@@ -159,8 +157,8 @@ class Patient(sim.Component):
         self.release(self.providers)
 
         # TESTING (bed stays held; the linked Test claims testing_equipment on its own)
-        # The patient leaves the animation lanes while its Test is shown in the testing lanes.
-        self._safe_move(None)
+        # The patient stays visible in its bed while its Test is shown in the testing lanes.
+        self._safe_move(self.env.q_awaiting_test)
         self.testing_done = sim.State("testing_done", value=False)
         stage_start = self.env.now()
         test = Test(

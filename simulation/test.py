@@ -1,4 +1,5 @@
 import salabim as sim
+from simulation.esi import ESI_COLORS
 
 
 class Test(sim.Component):
@@ -10,10 +11,10 @@ class Test(sim.Component):
         self.duration = duration
 
     def animation_objects(self, *args, **kwargs):
-        # Small grey circle so tests look different from patient rectangles.
+        # Small circle in the patient's ESI color so tests look different from patient rectangles.
         circle_kwargs = dict(
             radius=7,
-            fillcolor="#b0bec5",
+            fillcolor=ESI_COLORS.get(self.patient.esi, "#b0bec5"),
             linecolor="black",
             linewidth=1,
             text=str(self.patient.esi),

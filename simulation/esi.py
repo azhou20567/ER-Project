@@ -1,5 +1,14 @@
 import statistics
 
+# Display color per ESI level, shared by patient boxes, test circles, and the legend.
+ESI_COLORS = {
+    1: "#e53935",  # red
+    2: "#fb8c00",  # orange
+    3: "#fdd835",  # yellow/gold
+    4: "#81d4fa",  # light blue
+    5: "#a5d6a7",  # light green
+}
+
 class ESI:
     def __init__(self):
         self.lengths_of_visit = {1: [], 2: [], 3: [], 4: [], 5: []}

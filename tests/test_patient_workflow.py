@@ -61,6 +61,7 @@ class PatientWorkflowTests(unittest.TestCase):
             self.env.q_in_treatment,
             self.env.q_wait_testing,
             self.env.q_in_testing,
+            self.env.q_awaiting_test,
             self.env.q_wait_diagnosis,
             self.env.q_in_diagnosis,
             self.env.q_wait_treatment,
@@ -289,7 +290,8 @@ class PatientWorkflowTests(unittest.TestCase):
         (test,) = self.env.testing_equipment.claimers()
         self.assertIs(test.patient, patient)
         self.assertIn(test, self.env.q_in_testing)
-        self.assertIsNone(patient._anim_queue)
+        # The patient stays visible in its bed while the test runs.
+        self.assertIn(patient, self.env.q_awaiting_test)
         self.assertFalse(patient.testing_done())
 
         self.env.run(till=6.5)

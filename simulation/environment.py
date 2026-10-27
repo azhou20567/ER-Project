@@ -12,6 +12,7 @@ def create_environment():
     env.q_wait_bed = sim.Queue("q_wait_bed")
     env.q_wait_testing = sim.Queue("q_wait_testing")
     env.q_in_testing = sim.Queue("q_in_testing")
+    env.q_awaiting_test = sim.Queue("q_awaiting_test") # patients in their bed while their Test runs
     env.q_wait_diagnosis = sim.Queue("q_wait_diagnosis")
     env.q_in_diagnosis = sim.Queue("q_in_diagnosis")
     env.q_wait_treatment = sim.Queue("q_wait_treatment")
@@ -25,5 +26,7 @@ def create_environment():
     beds = sim.Resource("beds", capacity = NUM_BEDS) # creating resource for beds, capacity based on config.py
     # Used by Test components; attached to env so the return signature stays unchanged.
     env.testing_equipment = sim.Resource("testing_equipment", capacity = NUM_TESTING_STATIONS)
+    # Also attached to env so the animation can show how busy each resource is.
+    env.nurses, env.providers, env.beds = triage, providers, beds
 
     return env, triage, providers, beds # returning the environment and resources to be used in the simulation
