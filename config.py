@@ -30,3 +30,7 @@ ANIMATE = True
 
 # Makes animation speed up.
 ANIMATION_SPEED = 5
+
+# Animation window size in pixels; the stage layout scales to fit.
+ANIMATION_WIDTH = 1024
+ANIMATION_HEIGHT = 640

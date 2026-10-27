@@ -3,8 +3,9 @@ This module only deals with visualization (layout, colors, labels). It intention
 change the simulation model or its outcomes.
 """
 
+import math
 import salabim as sim
-from config import ANIMATION_SPEED
+from config import ANIMATION_SPEED, ANIMATION_WIDTH, ANIMATION_HEIGHT
 
 def _animate_text(*args, **kwargs):
     try:
@@ -14,56 +15,6 @@ def _animate_text(*args, **kwargs):
             kwargs.pop(key, None)
         return sim.AnimateText(*args, **kwargs)
 
-
-def _try_animation_kwargs(env):
-    """
-    Start animation with best-effort kwargs so coordinates and background are stable.
-    """
-    try:
-        env.animate(True, x0=0, x1=420, y0=0, y1=520, backgroundcolor="#000000")
-        return
-    except TypeError:
-        pass
-
-    try:
-        env.animate(True, x0=0, x1=420, y0=0, y1=520)
-        return
-    except TypeError:
-        pass
-
-    env.animate(True)
-
-
-def _try_set_animation_parameters(env):
-    # Background
-    for method_name, kwargs in [
-        ("animation_parameters", {"backgroundcolor": "#000000"}),
-        ("animation_parameters", {"background_color": "#000000"}),
-        ("animation_parameters", {"bgcolor": "#000000"}),
-    ]:
-        method = getattr(env, method_name, None)
-        if method is None:
-            continue
-        try:
-            method(**kwargs)
-            break
-        except TypeError:
-            continue
-
-    # Speed
-    for method_name, args, kwargs in [
-        ("animation_speed", (ANIMATION_SPEED,), {}),
-        ("speed", (ANIMATION_SPEED,), {}),
-        ("animation_parameters", (), {"speed": ANIMATION_SPEED}),
-    ]:
-        method = getattr(env, method_name, None)
-        if method is None:
-            continue
-        try:
-            method(*args, **kwargs)
-            break
-        except TypeError:
-            continue
 
 def setup_animation(env):
     """
@@ -79,34 +30,40 @@ def setup_animation(env):
     - q_wait_discharge, q_in_discharge
     Every stage after the ED bed is entered with the bed held.
     """
-    _try_animation_kwargs(env)
-    _try_set_animation_parameters(env)
+    # World coordinates match pixels: (0, 0) is bottom-left, (width, height) is top-right.
+    width, height = ANIMATION_WIDTH, ANIMATION_HEIGHT
+    env.animation_parameters(
+        animate=True,
+        width=width,
+        height=height,
+        x0=0,
+        y0=0,
+        x1=width,
+        background_color="#000000",
+        speed=ANIMATION_SPEED,
+        title="ER Simulation",
+        show_time=False,  # The "Sim time" label below replaces Salabim's built-in clock.
+    )
 
     white = "#ffffff"
+    margin = 12
     _animate_text(
         lambda: f"Sim time: {env.now():.1f} min",
-        x=350,
-        y=12,
+        x=width - margin,
+        y=height - margin,
         fontsize=12,
-        xy_anchor="ne",
+        text_anchor="ne",
         textcolor=white,
     )
 
     _animate_text(
         "Stages after the ED bed hold a bed; grey circles are tests",
-        x=350,
-        y=30,
+        x=width - margin,
+        y=height - 30,
         fontsize=10,
-        xy_anchor="ne",
+        text_anchor="ne",
         textcolor=white,
     )
-
-    # Layout: two columns so all 13 stages are visible.
-    column_width = 512
-    rows_per_column = 7
-    title_gap = 14
-    step = 72
-    y0 = 56
 
     sections = [
         ("Waiting for triage", env.q_wait_triage),
@@ -124,10 +81,19 @@ def setup_animation(env):
         ("Discharge / transfer", env.q_in_discharge),
     ]
 
+    # Layout: columns of stages filling the window, reading top to bottom.
+    rows_per_column = 7
+    num_columns = math.ceil(len(sections) / rows_per_column)
+    column_width = (width - 2 * margin) / num_columns
+    header_height = 56
+    step = (height - header_height - margin) / rows_per_column
+    title_gap = 18
+    half_box_width = 14  # Patient boxes are centered on their position and 26 px wide.
+
     for i, (title, queue) in enumerate(sections):
-        x0 = 12 + (i // rows_per_column) * column_width
-        y_title = y0 + (i % rows_per_column) * step
-        y_queue = y_title + title_gap
+        x0 = margin + (i // rows_per_column) * column_width
+        y_title = height - header_height - (i % rows_per_column) * step
+        y_queue = y_title - title_gap
 
         # Show live counts so we can verify patients are entering later queues.
         _animate_text(
@@ -135,7 +101,7 @@ def setup_animation(env):
             x=x0,
             y=y_title,
             fontsize=10,
-            xy_anchor="w",
+            text_anchor="w",
             textcolor=white,
         )
-        queue.animate(x=x0, y=y_queue, direction="e", title="")
+        queue.animate(x=x0 + half_box_width, y=y_queue, direction="e", title="")

@@ -1,3 +1,4 @@
+import random
 import unittest
 from unittest.mock import patch
 
@@ -5,6 +6,7 @@ import salabim as sim
 
 import config as cfg
 import simulation.environment as environment
+from simulation.arrival_generator import ArrivalGenerator
 from simulation.esi import ESI
 from simulation.patient import Patient
 
@@ -365,6 +367,31 @@ class PatientWorkflowTests(unittest.TestCase):
         # Arriving: triage 11-12, bed at 12 (freed at 11), then exam/test/diagnosis/discharge until 19.
         self.assertEqual(self.metrics.lengths_of_visit[3], [11.0, 12.5])
         self.assert_departed(in_bed, arriving)
+
+
+class AnimationNeutralityTests(unittest.TestCase):
+    def setUp(self):
+        previous_yieldless = sim.yieldless()
+        sim.yieldless(False)
+        self.addCleanup(sim.yieldless, previous_yieldless)
+
+    def run_simulation(self, animate):
+        # Same seed and synthetic arrivals; only the ANIMATE flag differs (no window is opened).
+        with patch.object(cfg, "ANIMATE", animate):
+            random.seed(1)
+            sim.random_seed(1)
+            env, triage, providers, beds = environment.create_environment()
+            metrics = ESI()
+            ArrivalGenerator(triage=triage, providers=providers, beds=beds, metrics=metrics, env=env)
+            env.run(till=2000)
+        return metrics
+
+    def test_animate_flag_does_not_change_results(self):
+        animated = self.run_simulation(animate=True)
+        plain = self.run_simulation(animate=False)
+        self.assertEqual(animated.wait_times, plain.wait_times)
+        self.assertEqual(animated.lengths_of_visit, plain.lengths_of_visit)
+        self.assertEqual(animated.stage_waits, plain.stage_waits)
 
 
 if __name__ == "__main__":
